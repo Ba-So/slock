@@ -1,67 +1,89 @@
 {
-  description = "An over-engineered Hello World in C";
+  description = "slock - simple screen locker";
 
-  # Nixpkgs / NixOS version to use.
-  inputs.nixpkgs.url = "nixpkgs/nixos-21.05";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    flake-utils.url = "github:numtide/flake-utils";
+  };
 
-  outputs = { self, nixpkgs }:
-    let
+  outputs = { self, nixpkgs, flake-utils }:
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        pkgs = nixpkgs.legacyPackages.${system};
+        
+        version = "1.5";
+        
+      in {
+        packages = {
+          slock = pkgs.stdenv.mkDerivation rec {
+            pname = "slock";
+            inherit version;
 
-      # to work with older version of flakes
-      lastModifiedDate = self.lastModifiedDate or self.lastModified or "19700101";
+            src = ./.;
 
-      # Generate a user-friendly version number.
-      version = builtins.substring 0 8 lastModifiedDate;
+            buildInputs = with pkgs; [
+              xorg.libX11
+              xorg.libXext
+              xorg.libXrandr
+              imlib2
+            ];
 
-      # System types to support.
-      supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-linux" "aarch64-darwin" ];
+            nativeBuildInputs = with pkgs; [
+              pkg-config
+            ];
 
-      # Helper function to generate an attrset '{ x86_64-linux = f "x86_64-linux"; ... }'.
-      forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
+            makeFlags = [
+              "PREFIX=${placeholder "out"}"
+              "CC=${pkgs.stdenv.cc.targetPrefix}cc"
+            ];
 
-      # Nixpkgs instantiated for supported system types.
-      nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; overlays = [ self.overlay ]; });
+            installPhase = ''
+              runHook preInstall
+              
+              # Custom install without setuid bit
+              mkdir -p $out/bin
+              cp -f slock $out/bin/
+              chmod 755 $out/bin/slock
+              
+              mkdir -p $out/share/man/man1
+              sed "s/VERSION/${version}/g" <slock.1 >$out/share/man/man1/slock.1
+              chmod 644 $out/share/man/man1/slock.1
+              
+              runHook postInstall
+            '';
 
-    in
+            meta = with pkgs.lib; {
+              description = "Simple screen locker";
+              homepage = "https://tools.suckless.org/slock/";
+              license = licenses.mit;
+              maintainers = with maintainers; [ ];
+              platforms = platforms.linux;
+            };
+          };
 
-    {
-
-      # A Nixpkgs overlay.
-      overlay = final: prev: {
-
-        hello = with final; stdenv.mkDerivation rec {
-          pname = "slock";
-          inherit version;
-
-          src = ./.;
-
-          nativeBuildInputs = [ autoreconfHook ];
+          default = self.packages.${system}.slock;
         };
 
-      };
-
-      # Provide some binary packages for selected system types.
-      packages = forAllSystems (system:
-        {
-          inherit (nixpkgsFor.${system}) slock;
-        });
-
-      # The default package for 'nix build'. This makes sense if the
-      # flake provides only one package or there is a clear "main"
-      # package.
-      defaultPackage = forAllSystems (system: self.packages.${system}.slock);
-
-      # A NixOS module, if applicable (e.g. if the package provides a system service).
-      nixosModules.slock =
-        { pkgs, ... }:
-        {
-          nixpkgs.overlays = [ self.overlay ];
-
-          environment.systemPackages = [ pkgs.slock ];
-
-          #systemd.services = { ... };
+        overlays.default = final: prev: {
+          inherit (self.packages.${system}) slock;
         };
 
+        nixosModules.slock = { config, lib, pkgs, ... }:
+          with lib;
+          {
+            options.services.slock = {
+              enable = mkEnableOption "slock screen locker";
+            };
 
-    };
+            config = mkIf config.services.slock.enable {
+              environment.systemPackages = [ self.packages.${system}.slock ];
+              security.wrappers.slock = {
+                owner = "root";
+                group = "root";
+                setuid = true;
+                source = "${self.packages.${system}.slock}/bin/slock";
+              };
+            };
+          };
+      });
 }
