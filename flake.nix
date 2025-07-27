@@ -6,84 +6,51 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
-        pkgs = nixpkgs.legacyPackages.${system};
-        
-        version = "1.5";
-        
-      in {
-        packages = {
-          slock = pkgs.stdenv.mkDerivation rec {
+        pkgs = import nixpkgs { inherit system; };
+        configFile = import ./config.nix {
+          inherit pkgs;
+        };
+      in
+      {
+        packages = rec {
+          slock = pkgs.stdenv.mkDerivation {
             pname = "slock";
-            inherit version;
+            version = "1.5";
 
-            src = ./.;
+            src = self;
 
             buildInputs = with pkgs; [
+              xorg.xorgproto
               xorg.libX11
               xorg.libXext
               xorg.libXrandr
-              imlib2
+              libxcrypt
             ];
 
-            nativeBuildInputs = with pkgs; [
-              pkg-config
-            ];
-
-            makeFlags = [
-              "PREFIX=${placeholder "out"}"
-              "CC=${pkgs.stdenv.cc.targetPrefix}cc"
-            ];
-
-            installPhase = ''
-              runHook preInstall
-              
-              # Custom install without setuid bit
-              mkdir -p $out/bin
-              cp -f slock $out/bin/
-              chmod 755 $out/bin/slock
-              
-              mkdir -p $out/share/man/man1
-              sed "s/VERSION/${version}/g" <slock.1 >$out/share/man/man1/slock.1
-              chmod 644 $out/share/man/man1/slock.1
-              
-              runHook postInstall
+            makeFlags = [ "CC:=$(CC)" ];
+            installFlags = [ "PREFIX=$(out)" ];
+            prePatch = ''
+              cp ${configFile} config.def.h
             '';
 
-            meta = with pkgs.lib; {
-              description = "Simple screen locker";
-              homepage = "https://tools.suckless.org/slock/";
-              license = licenses.mit;
-              maintainers = with maintainers; [ ];
-              platforms = platforms.linux;
+            postPatch = "sed -i '/chmod u+s/d' Makefile";
+
+            meta = {
+              mainProgram = "slock";
             };
           };
 
-          default = self.packages.${system}.slock;
+          default = slock;
+          
         };
-
-        overlays.default = final: prev: {
-          inherit (self.packages.${system}) slock;
-        };
-
-        nixosModules.slock = { config, lib, pkgs, ... }:
-          with lib;
-          {
-            options.services.slock = {
-              enable = mkEnableOption "slock screen locker";
-            };
-
-            config = mkIf config.services.slock.enable {
-              environment.systemPackages = [ self.packages.${system}.slock ];
-              security.wrappers.slock = {
-                owner = "root";
-                group = "root";
-                setuid = true;
-                source = "${self.packages.${system}.slock}/bin/slock";
-              };
-            };
-          };
-      });
+    });
 }
