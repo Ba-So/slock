@@ -34,6 +34,7 @@
               xorg.libXext
               xorg.libXrandr
               libxcrypt
+              imlib2
             ];
 
             makeFlags = [ "CC:=$(CC)" ];
